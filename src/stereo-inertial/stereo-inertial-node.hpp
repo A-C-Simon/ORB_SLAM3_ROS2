@@ -1,6 +1,8 @@
 #ifndef __STEREO_INERTIAL_NODE_HPP__
 #define __STEREO_INERTIAL_NODE_HPP__
 
+#include <atomic>
+
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -13,6 +15,7 @@
 #include "Tracking.h"
 
 #include "utility.hpp"
+#include "orb_pose_publisher.hpp"
 
 using ImuMsg = sensor_msgs::msg::Imu;
 using ImageMsg = sensor_msgs::msg::Image;
@@ -33,9 +36,11 @@ private:
     rclcpp::Subscription<ImuMsg>::SharedPtr   subImu_;
     rclcpp::Subscription<ImageMsg>::SharedPtr subImgLeft_;
     rclcpp::Subscription<ImageMsg>::SharedPtr subImgRight_;
+    rclcpp::Publisher<ImageMsg>::SharedPtr trackingImagePub_;
 
     ORB_SLAM3::System *SLAM_;
-    std::thread *syncThread_;
+    std::thread syncThread_;
+    std::atomic_bool running_{true};
 
     // IMU
     queue<ImuMsg::SharedPtr> imuBuf_;
@@ -51,6 +56,7 @@ private:
 
     bool bClahe_;
     cv::Ptr<cv::CLAHE> clahe_ = cv::createCLAHE(3.0, cv::Size(8, 8));
+    std::unique_ptr<OrbPosePublisher> pose_publisher_;
 };
 
 #endif

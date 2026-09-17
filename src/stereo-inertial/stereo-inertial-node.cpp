@@ -1,6 +1,8 @@
 #include "stereo-inertial-node.hpp"
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/imgproc.hpp>
 
 using std::placeholders::_1;
 
@@ -60,15 +62,18 @@ StereoInertialNode::StereoInertialNode(ORB_SLAM3::System *SLAM, const string &st
     subImu_ = this->create_subscription<ImuMsg>("imu", 1000, std::bind(&StereoInertialNode::GrabImu, this, _1));
     subImgLeft_ = this->create_subscription<ImageMsg>("camera/left", 100, std::bind(&StereoInertialNode::GrabImageLeft, this, _1));
     subImgRight_ = this->create_subscription<ImageMsg>("camera/right", 100, std::bind(&StereoInertialNode::GrabImageRight, this, _1));
+    trackingImagePub_ = this->create_publisher<ImageMsg>("orbslam3/tracking_image", 2);
 
-    syncThread_ = new std::thread(&StereoInertialNode::SyncWithImu, this);
+    pose_publisher_ = std::make_unique<OrbPosePublisher>(this);
+    syncThread_ = std::thread(&StereoInertialNode::SyncWithImu, this);
 }
 
 StereoInertialNode::~StereoInertialNode()
 {
-    // Delete sync thread
-    syncThread_->join();
-    delete syncThread_;
+    running_ = false;
+    if (syncThread_.joinable()) {
+        syncThread_.join();
+    }
 
     // Stop all threads
     SLAM_->Shutdown();
@@ -79,31 +84,28 @@ StereoInertialNode::~StereoInertialNode()
 
 void StereoInertialNode::GrabImu(const ImuMsg::SharedPtr msg)
 {
-    bufMutex_.lock();
+    std::lock_guard<std::mutex> lock(bufMutex_);
     imuBuf_.push(msg);
-    bufMutex_.unlock();
 }
 
 void StereoInertialNode::GrabImageLeft(const ImageMsg::SharedPtr msgLeft)
 {
-    bufMutexLeft_.lock();
+    std::lock_guard<std::mutex> lock(bufMutexLeft_);
 
     if (!imgLeftBuf_.empty())
         imgLeftBuf_.pop();
     imgLeftBuf_.push(msgLeft);
 
-    bufMutexLeft_.unlock();
 }
 
 void StereoInertialNode::GrabImageRight(const ImageMsg::SharedPtr msgRight)
 {
-    bufMutexRight_.lock();
+    std::lock_guard<std::mutex> lock(bufMutexRight_);
 
     if (!imgRightBuf_.empty())
         imgRightBuf_.pop();
     imgRightBuf_.push(msgRight);
 
-    bufMutexRight_.unlock();
 }
 
 cv::Mat StereoInertialNode::GetImage(const ImageMsg::SharedPtr msg)
@@ -118,6 +120,7 @@ cv::Mat StereoInertialNode::GetImage(const ImageMsg::SharedPtr msg)
     catch (cv_bridge::Exception &e)
     {
         RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
+        return {};
     }
 
     if (cv_ptr->image.type() == 0)
@@ -135,65 +138,65 @@ void StereoInertialNode::SyncWithImu()
 {
     const double maxTimeDiff = 0.01;
 
-    while (1)
+    while (running_ && rclcpp::ok())
     {
-        cv::Mat imLeft, imRight;
-        double tImLeft = 0, tImRight = 0;
-        if (!imgLeftBuf_.empty() && !imgRightBuf_.empty() && !imuBuf_.empty())
         {
-            tImLeft = Utility::StampToSec(imgLeftBuf_.front()->header.stamp);
-            tImRight = Utility::StampToSec(imgRightBuf_.front()->header.stamp);
+            ImageMsg::SharedPtr left_msg;
+            ImageMsg::SharedPtr right_msg;
+            vector<ORB_SLAM3::IMU::Point> imu_measurements;
+            double tImLeft = 0.0;
+            double tImRight = 0.0;
 
-            bufMutexRight_.lock();
+            {
+                std::scoped_lock lock(bufMutex_, bufMutexLeft_, bufMutexRight_);
+                if (imgLeftBuf_.empty() || imgRightBuf_.empty() || imuBuf_.empty()) {
+                    // Release all locks before sleeping so subscriptions can fill queues.
+                } else {
+                    tImLeft = Utility::StampToSec(imgLeftBuf_.front()->header.stamp);
+                    tImRight = Utility::StampToSec(imgRightBuf_.front()->header.stamp);
             while ((tImLeft - tImRight) > maxTimeDiff && imgRightBuf_.size() > 1)
             {
                 imgRightBuf_.pop();
                 tImRight = Utility::StampToSec(imgRightBuf_.front()->header.stamp);
             }
-            bufMutexRight_.unlock();
-
-            bufMutexLeft_.lock();
             while ((tImRight - tImLeft) > maxTimeDiff && imgLeftBuf_.size() > 1)
             {
                 imgLeftBuf_.pop();
                 tImLeft = Utility::StampToSec(imgLeftBuf_.front()->header.stamp);
             }
-            bufMutexLeft_.unlock();
-
-            if ((tImLeft - tImRight) > maxTimeDiff || (tImRight - tImLeft) > maxTimeDiff)
-            {
-                std::cout << "big time difference" << std::endl;
-                continue;
-            }
-            if (tImLeft > Utility::StampToSec(imuBuf_.back()->header.stamp))
-                continue;
-
-            bufMutexLeft_.lock();
-            imLeft = GetImage(imgLeftBuf_.front());
-            imgLeftBuf_.pop();
-            bufMutexLeft_.unlock();
-
-            bufMutexRight_.lock();
-            imRight = GetImage(imgRightBuf_.front());
-            imgRightBuf_.pop();
-            bufMutexRight_.unlock();
-
-            vector<ORB_SLAM3::IMU::Point> vImuMeas;
-            bufMutex_.lock();
-            if (!imuBuf_.empty())
-            {
-                // Load imu measurements from buffer
-                vImuMeas.clear();
-                while (!imuBuf_.empty() && Utility::StampToSec(imuBuf_.front()->header.stamp) <= tImLeft)
-                {
-                    double t = Utility::StampToSec(imuBuf_.front()->header.stamp);
-                    cv::Point3f acc(imuBuf_.front()->linear_acceleration.x, imuBuf_.front()->linear_acceleration.y, imuBuf_.front()->linear_acceleration.z);
-                    cv::Point3f gyr(imuBuf_.front()->angular_velocity.x, imuBuf_.front()->angular_velocity.y, imuBuf_.front()->angular_velocity.z);
-                    vImuMeas.push_back(ORB_SLAM3::IMU::Point(acc, gyr, t));
-                    imuBuf_.pop();
+                    if (std::abs(tImLeft - tImRight) <= maxTimeDiff &&
+                        tImLeft <= Utility::StampToSec(imuBuf_.back()->header.stamp)) {
+                        left_msg = imgLeftBuf_.front();
+                        right_msg = imgRightBuf_.front();
+                        imgLeftBuf_.pop();
+                        imgRightBuf_.pop();
+                        while (!imuBuf_.empty() &&
+                               Utility::StampToSec(imuBuf_.front()->header.stamp) <= tImLeft) {
+                            const auto & imu = imuBuf_.front();
+                            const double t = Utility::StampToSec(imu->header.stamp);
+                            cv::Point3f acc(imu->linear_acceleration.x,
+                                            imu->linear_acceleration.y,
+                                            imu->linear_acceleration.z);
+                            cv::Point3f gyr(imu->angular_velocity.x,
+                                            imu->angular_velocity.y,
+                                            imu->angular_velocity.z);
+                            imu_measurements.emplace_back(acc, gyr, t);
+                            imuBuf_.pop();
+                        }
+                    }
                 }
             }
-            bufMutex_.unlock();
+
+            if (!left_msg || !right_msg || imu_measurements.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
+            cv::Mat imLeft = GetImage(left_msg);
+            cv::Mat imRight = GetImage(right_msg);
+            if (imLeft.empty() || imRight.empty()) {
+                continue;
+            }
 
             if (bClahe_)
             {
@@ -207,7 +210,25 @@ void StereoInertialNode::SyncWithImu()
                 cv::remap(imRight, imRight, M1r_, M2r_, cv::INTER_LINEAR);
             }
 
-            SLAM_->TrackStereo(imLeft, imRight, tImLeft, vImuMeas);
+            const auto pose = SLAM_->TrackStereo(
+              imLeft, imRight, tImLeft, imu_measurements);
+            cv::Mat tracking_image;
+            cv::cvtColor(imLeft, tracking_image, cv::COLOR_GRAY2BGR);
+            cv::drawKeypoints(
+              tracking_image, SLAM_->GetTrackedKeyPointsUn(), tracking_image,
+              cv::Scalar(0, 255, 0), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+            trackingImagePub_->publish(
+              *cv_bridge::CvImage(left_msg->header, "bgr8", tracking_image).toImageMsg());
+            const bool inertial_map_ready =
+              SLAM_->GetTrackingState() == ORB_SLAM3::Tracking::OK &&
+              SLAM_->GetTimeFromIMUInit() > 0.0;
+            // Map points can be retired while the initializer resets/replaces
+            // maps. Do not dereference them until the inertial map is stable.
+            pose_publisher_->publish(
+              pose, left_msg->header.stamp,
+              inertial_map_ready ? SLAM_->GetTrackedMapPoints() :
+                std::vector<ORB_SLAM3::MapPoint *>(),
+              inertial_map_ready);
 
             std::chrono::milliseconds tSleep(1);
             std::this_thread::sleep_for(tSleep);

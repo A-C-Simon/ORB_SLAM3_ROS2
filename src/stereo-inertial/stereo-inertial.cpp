@@ -12,14 +12,8 @@ int main(int argc, char **argv)
 {
     if(argc < 4)
     {
-        std::cerr << "\nUsage: ros2 run orbslam stereo path_to_vocabulary path_to_settings do_rectify [do_equalize]" << std::endl;
-        rclcpp::shutdown();
+        std::cerr << "\nUsage: ros2 run orbslam3 stereo-inertial path_to_vocabulary path_to_settings do_rectify [do_equalize] [viewer]" << std::endl;
         return 1;
-    }
-
-    if(argc == 4)
-    {
-        argv[4] = "false";
     }
 
     rclcpp::init(argc, argv);
@@ -27,10 +21,11 @@ int main(int argc, char **argv)
     // malloc error using new.. try shared ptr
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
 
-    bool visualization = true;
+    bool visualization = argc < 6 || std::string(argv[5]) != "false";
     ORB_SLAM3::System pSLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_STEREO, visualization);
 
-    auto node = std::make_shared<StereoInertialNode>(&pSLAM, argv[2], argv[3], argv[4]);
+    const std::string equalize = argc >= 5 ? argv[4] : "false";
+    auto node = std::make_shared<StereoInertialNode>(&pSLAM, argv[2], argv[3], equalize);
     std::cout << "============================" << std::endl;
 
     rclcpp::spin(node);
