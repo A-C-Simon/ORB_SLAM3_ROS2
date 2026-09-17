@@ -1,6 +1,50 @@
 # ORB_SLAM3_ROS2
 This repository is ROS2 wrapping to use ORB_SLAM3
 
+## Workspace rover demo (ROS 2 Humble)
+
+This workspace version includes a Gazebo Classic stereo-inertial rover demo,
+ROS pose/path output, and RViz visualization. Build the core library first,
+then the two ROS packages:
+
+```bash
+# The system /usr/local Pangolin on this machine is ABI-incompatible with
+# Ubuntu 22.04's OpenEXR, so use the pinned workspace-local build.
+cmake -S ~/ros2_ws/src/Pangolin -B ~/ros2_ws/src/Pangolin/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=~/ros2_ws/src/Pangolin/install \
+  -DBUILD_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DBUILD_TESTS=OFF
+cmake --build ~/ros2_ws/src/Pangolin/build -j2
+cmake --install ~/ros2_ws/src/Pangolin/build
+
+cmake -S ~/ros2_ws/src/ORB_SLAM3 -B ~/ros2_ws/src/ORB_SLAM3/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPangolin_DIR=~/ros2_ws/src/Pangolin/install/lib/cmake/Pangolin
+cmake --build ~/ros2_ws/src/ORB_SLAM3/build --target ORB_SLAM3 -j2
+
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select orbslam3 orbslam3_rover_sim \
+  --cmake-args -DORB_SLAM3_ROOT_DIR=$PWD/src/ORB_SLAM3 \
+  -DPangolin_DIR=$PWD/src/Pangolin/install/lib/cmake/Pangolin
+source install/setup.bash
+ros2 launch orbslam3_rover_sim rover_orbslam.launch.py
+```
+
+Or use the workspace runner, which accepts explicit boolean arguments:
+
+```bash
+cd ~/ros2_ws/src
+./orbslam3_gazebo.sh --gui false --rviz true --teleop false
+./orbslam3_gazebo.sh --teleop true --gui false
+./orbslam3_gazebo.sh --help
+```
+
+Set `gui:=false` for headless Gazebo, `rviz:=false` to disable RViz, or
+`auto:=false` for manual control with
+`ros2 run orbslam3_rover_sim key_teleop.py`. The default ORB Pangolin viewer
+is disabled; enable it with `orb_viewer:=true`.
+
 ---
 
 ## Demo Video
