@@ -21,6 +21,7 @@
 #include "Tracking.h"
 
 #include "utility.hpp"
+#include "orb_pose_publisher.hpp"
 
 class RgbdSlamNode : public rclcpp::Node
 {
@@ -44,6 +45,7 @@ private:
     std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image> > depth_sub;
 
     std::shared_ptr<message_filters::Synchronizer<approximate_sync_policy> > syncApproximate;
+    std::unique_ptr<OrbPosePublisher> pose_publisher_;
 };
 
 #endif

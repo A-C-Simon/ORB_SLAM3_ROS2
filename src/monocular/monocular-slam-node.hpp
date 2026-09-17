@@ -12,6 +12,7 @@
 #include "Tracking.h"
 
 #include "utility.hpp"
+#include "orb_pose_publisher.hpp"
 
 class MonocularSlamNode : public rclcpp::Node
 {
@@ -30,6 +31,7 @@ private:
     cv_bridge::CvImagePtr m_cvImPtr;
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr m_image_subscriber;
+    std::unique_ptr<OrbPosePublisher> pose_publisher_;
 };
 
 #endif

@@ -13,7 +13,7 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM)
         "camera",
         10,
         std::bind(&MonocularSlamNode::GrabImage, this, std::placeholders::_1));
-    std::cout << "slam changed" << std::endl;
+    pose_publisher_ = std::make_unique<OrbPosePublisher>(this);
 }
 
 MonocularSlamNode::~MonocularSlamNode()
@@ -38,6 +38,7 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg)
         return;
     }
 
-    std::cout<<"one frame has been sent"<<std::endl;
-    m_SLAM->TrackMonocular(m_cvImPtr->image, Utility::StampToSec(msg->header.stamp));
+    const auto pose = m_SLAM->TrackMonocular(
+      m_cvImPtr->image, Utility::StampToSec(msg->header.stamp));
+    pose_publisher_->publish(pose, msg->header.stamp);
 }

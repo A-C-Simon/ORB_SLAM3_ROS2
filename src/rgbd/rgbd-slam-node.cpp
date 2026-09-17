@@ -8,11 +8,12 @@ RgbdSlamNode::RgbdSlamNode(ORB_SLAM3::System* pSLAM)
 :   Node("ORB_SLAM3_ROS2"),
     m_SLAM(pSLAM)
 {
-    rgb_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/rgb");
-    depth_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/depth");
+    rgb_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(this, "camera/rgb");
+    depth_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(this, "camera/depth");
 
     syncApproximate = std::make_shared<message_filters::Synchronizer<approximate_sync_policy> >(approximate_sync_policy(10), *rgb_sub, *depth_sub);
     syncApproximate->registerCallback(&RgbdSlamNode::GrabRGBD, this);
+    pose_publisher_ = std::make_unique<OrbPosePublisher>(this);
 
 }
 
@@ -49,5 +50,7 @@ void RgbdSlamNode::GrabRGBD(const ImageMsg::SharedPtr msgRGB, const ImageMsg::Sh
         return;
     }
 
-    m_SLAM->TrackRGBD(cv_ptrRGB->image, cv_ptrD->image, Utility::StampToSec(msgRGB->header.stamp));
+    const auto pose = m_SLAM->TrackRGBD(
+      cv_ptrRGB->image, cv_ptrD->image, Utility::StampToSec(msgRGB->header.stamp));
+    pose_publisher_->publish(pose, msgRGB->header.stamp);
 }

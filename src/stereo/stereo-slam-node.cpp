@@ -48,11 +48,12 @@ StereoSlamNode::StereoSlamNode(ORB_SLAM3::System* pSLAM, const string &strSettin
         cv::initUndistortRectifyMap(K_r,D_r,R_r,P_r.rowRange(0,3).colRange(0,3),cv::Size(cols_r,rows_r),CV_32F,M1r,M2r);
     }
 
-    left_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/left");
-    right_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(shared_ptr<rclcpp::Node>(this), "camera/right");
+    left_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(this, "camera/left");
+    right_sub = std::make_shared<message_filters::Subscriber<ImageMsg> >(this, "camera/right");
 
     syncApproximate = std::make_shared<message_filters::Synchronizer<approximate_sync_policy> >(approximate_sync_policy(10), *left_sub, *right_sub);
     syncApproximate->registerCallback(&StereoSlamNode::GrabStereo, this);
+    pose_publisher_ = std::make_unique<OrbPosePublisher>(this);
 }
 
 StereoSlamNode::~StereoSlamNode()
@@ -92,10 +93,12 @@ void StereoSlamNode::GrabStereo(const ImageMsg::SharedPtr msgLeft, const ImageMs
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        m_SLAM->TrackStereo(imLeft, imRight, Utility::StampToSec(msgLeft->header.stamp));
+        const auto pose = m_SLAM->TrackStereo(imLeft, imRight, Utility::StampToSec(msgLeft->header.stamp));
+        pose_publisher_->publish(pose, msgLeft->header.stamp);
     }
     else
     {
-        m_SLAM->TrackStereo(cv_ptrLeft->image, cv_ptrRight->image, Utility::StampToSec(msgLeft->header.stamp));
+        const auto pose = m_SLAM->TrackStereo(cv_ptrLeft->image, cv_ptrRight->image, Utility::StampToSec(msgLeft->header.stamp));
+        pose_publisher_->publish(pose, msgLeft->header.stamp);
     }
 }

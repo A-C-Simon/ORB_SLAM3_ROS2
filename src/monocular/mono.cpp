@@ -25,7 +25,7 @@ int main(int argc, char **argv)
     ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, visualization);
 
     auto node = std::make_shared<MonocularSlamNode>(&SLAM);
-    std::cout << "============================ " << std::endl;\
+    std::cout << "============================ " << std::endl;
 
     rclcpp::spin(node);
     rclcpp::shutdown();
